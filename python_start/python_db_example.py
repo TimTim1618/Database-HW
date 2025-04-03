@@ -5,16 +5,17 @@
 
 import mysql.connector
 from tabulate import tabulate
+import datetime
+import sys
 
 
 def open_database(hostname, user_name, mysql_pw, database_name):
-    global conn
+    global conn, cursor
     conn = mysql.connector.connect(host=hostname,
                                    user=user_name,
                                    password=mysql_pw,
                                    database=database_name
                                    )
-    global cursor
     cursor = conn.cursor()
 
 
@@ -30,9 +31,19 @@ def printFormat(result):
 # select and display query
 
 
-def executeSelect(query):
-    cursor.execute(query)
-    printFormat(cursor.fetchall())
+def executeSelect(query, params = None):
+    if params is None:
+        params = ()
+    cursor.execute(query, params)
+    result = cursor.fetchall()
+    print("")
+    print("Query Result:")
+    print("")
+    #getting header names
+    header = [col[0] for col in cursor.description]
+    print(tabulate(result, headers = header))
+    print("")
+    return result
 
 
 def insert(table, values):
@@ -41,8 +52,10 @@ def insert(table, values):
     conn.commit()
 
 
-def executeUpdate(query):  # use this function for delete and update
-    cursor.execute(query)
+def executeUpdate(query, params=None):  # use this function for delete and update
+    if params is None:
+        params = ()
+    cursor.execute(query, params)
     conn.commit()
 
 
@@ -50,10 +63,146 @@ def close_db():  # use this function to close db
     cursor.close()
     conn.close()
 
+#option 1 stuff
+def find_available_copies():
+    bookstore_name = input("Enter bookstore name: ").strip()
+    city = input("Enter city: ").strip
+    query = "SELECT bookstoreID FROM Bookstore WHERE bookstoreName = %s AND city = %s"
+    cursor.execute(query, (bookstore_name, city))
+    result = cursor.fetchone()
+    if not result:
+        print(f"\nNo bookstore found with name '{bookstore_name}' in {city}.")
+        return
+    bookstore_id = result[0]
+    #get all availabl ecopies
+    query = """
+        SELECT b.bookName, c.price
+        FROM Copy c
+        JOIN Book b ON c.bookID = b.bookID
+        WHERE c.bookstoreID = %s
+        AND c.copyID NOT IN (SELECT copyID FROM Purchase)
+        """
+    cursor.execute(query, (bookstore_id))
+    copies = cursor.fetchall()
+    if not copies:
+        print(f"\nNO copies found at {bookstore_name} in {city}.")
+    else:
+        print(f"\nAvailable copies at {bookstore_name} in {city}:")
+        print(tabulate(copies, headers=["Book Name", "Price"]))
+        print("")
+
+    #Option 2 stuff
+    def purchase_copy():
+        book_name = input("Enter the book name you want to order: ").strip()
+        query = """
+            SELECT c.copyID, bs.bookstoreName, bs.city, c.price
+            FROM Copy c
+            JOIN Book b ON c.bookID = b.bookID
+            JOIN Bookstore bs ON c.bookstoreID = bs.bookstoreID
+            WHERE b.bookName = %s
+            AND c.cipyID NOT IN (SELECT copyID FROM Purchase)
+            """
+        cursor.execute(query, (book_name,))
+        available_copies = cursor.fetchall()
+        if not available_copies:
+            print("\nThis book isn't avaibale. \n")
+            return
+        print("\nAvailable copies for '{}' are:".format(book_name))
+        print(tabulate(available_copies, headers=["Copy ID", "Bookstore Name", "City", "Price"]))
+        print("")
+
+        try:
+            copy_id = int(input("Enter the copyID you want to purchase: ").strip())
+        except ValueError:
+            print("Invalid copyID. \n")
+            return
+        
+        #verify if the selcted copyID is among available copies
+        if not any(copy_id == row[0] for row in available_copies):
+            print("Invalid copyID selected. Abort purchase.\n")
+            return
+        #new purchase id
+        cursor.execute("SELECT MAX(purchaseID) FROM Purchase")
+        max_id = cursor.fetchone()[0]
+        new_purchase_id = 0 if max_id is None else max_id + 1
+
+        now = datetime.datetime.now()
+        date_str = now.strftime("%Y-%m-%d")
+        time_str = now.strftime("%H:%M:%S")
+
+        #insert purchase record
+        query = "INSERT INTO Purcahse (purchaseID, copyID, date, time) VALUES (%s, %s, %s, %s)"
+        executeUpdate(query, (new_purchase_id, copy_id, date_str, time_str))
+        print("Purchase successful\n")
+
+    #option 3 stuff
+    def list_purchases():
+        bookstore_name = input("Enter bookstore name: ").strip()
+        city = input("Enter city: ").strip()
+        #find the book store record
+        query = "SELECT bookstoreID FROM Bookstore WHERE bookstoreName = %s AND city = %s"
+        cursor.execute(query, (bookstore_name, city))
+        result = cursor.fetchone()
+        if not result:
+            print(f"\nNo bookstore found with name {bookstore_name} in {city}")
+            return
+        bookstore_id = result[0]
+
+        query = """
+            SELECT b.bookName, c.price, p,date, p.time
+            FROM Purchase p
+            JOIN Copy c ON p.copyID = c.copyID
+            JOIN Book b ON c.bookID = b.bookID
+            WHERE c.bookstoreID = %s
+            """
+        cursor.execute(query, (bookstore_id,))
+        purchases = cursor.fetchall()
+        if not purchases:
+            print("f\nNo purchases found for {booksore_name} in {city}.\n")
+        else:
+            print(f"\nPurchaes for {bookstore_name} in {city}:")
+            print(tabulate(purchases, headers=["Book Name", "Price", "Date", "Time"]))
+            print("")
+
+    #option 4 stuff
+    def cancel_purcahses():
+        query = """
+            SELEcT p.purchaseID, b.bookName, bs.bookstoreName, p.date, p.time
+            FROM Purcahse p
+            JOIN Copy c ON p.copyID = c.copyID
+            JOIN Book b ON c.bookID = b.bookID
+            JOIN Bookstore bs ON c.bookstoreID = bs.bookstoreID
+            """
+        cursor.execute(query)
+        purchases = cursor.fetchall()
+        if not purchases:
+            print("\nNo purchases to cancel.\n")
+            return
+        print("\nCurrent Purchases:")
+        print(tabulate(purchases, headers=["Purcahses ID", "Book Name", "Bookstore Name", "Date", "Time"]))
+        print("")
+
+        try:
+            purchase_id = int(input("Enter the purcahseID to cancel: ").strip())
+        except ValueError:
+            print("Invalid purchaseID. \n")
+            return
+        
+        #verify purchase exists
+        cursor.execute("SELECT * FROM Purchase WHERE purchaseID = %s", (purchase_id,))
+        if not cursor.fetchone():
+            print("No purchase found with that ID.\n")
+            return
+        #delete purchase record
+        executeUpdate("DELETE FROM Purchase WHERE purchaseID = %s", (purchase_id,))
+        print("Purchase cancelled.\n")
+
+    #option 5 stuff
+    
 
 ##### Test #######
-mysql_username = 'MYUSERNAME'  # please change to your username
-mysql_password = 'MYMYSQLPASSWORD'  # please change to your MySQL password
+mysql_username = ''  # please change to your username
+mysql_password = ''  # please change to your MySQL password
 
 open_database('localhost', mysql_username, mysql_password,
               mysql_username)  # open database
